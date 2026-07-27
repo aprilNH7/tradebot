@@ -219,25 +219,56 @@ class TradingEngine:
             order = exchange.place_order(
                 symbol, side, OrderType.MARKET, quantity
             )
+            entry_price = self._fill_price(exchange, order, current_price, symbol)
             log.info(
-                f"EXECUTED: {side.value} {quantity:.6f} {symbol} @ ${current_price:.4f} "
+                f"EXECUTED: {side.value} {quantity:.6f} {symbol} @ ${entry_price:.4f} "
                 f"[{signal.strategy}] confidence={signal.confidence:.2f}"
             )
 
             self.risk_manager.register_trade(
-                symbol, side.value, quantity, current_price
+                symbol, side.value, quantity, entry_price
             )
             self.portfolio.record_trade(TradeRecord(
                 symbol=symbol,
                 side=side.value,
                 quantity=quantity,
-                entry_price=current_price,
+                entry_price=entry_price,
                 strategy=signal.strategy,
                 market=exchange.market_type.value,
             ))
 
         except Exception as e:
             log.error(f"Order failed for {symbol}: {e}")
+
+    def _fill_price(self, exchange: BaseExchange, order, quoted_price: float,
+                    symbol: str) -> float:
+        """Actual average fill price, falling back to the pre-trade quote.
+
+        Market orders cross the spread. Booking the quote we saw before sending
+        the order credits that spread as profit on both legs of a round trip,
+        which inflates reported PnL and can make a losing strategy look like a
+        winner. Always prefer what the exchange says we actually paid.
+        """
+        try:
+            filled = exchange.wait_for_fill(order)
+        except Exception as e:
+            log.warning(f"{symbol}: fill lookup failed ({e}), booking quoted price")
+            return quoted_price
+
+        if filled.filled_price:
+            slip = filled.filled_price - quoted_price
+            if abs(slip) > 1e-9:
+                log.debug(
+                    f"{symbol}: filled ${filled.filled_price:.4f} vs quote "
+                    f"${quoted_price:.4f} (slippage ${slip:+.4f})"
+                )
+            return filled.filled_price
+
+        log.warning(
+            f"{symbol}: no fill price after wait (status={filled.status}), "
+            f"booking quoted ${quoted_price:.4f} — reported PnL may drift"
+        )
+        return quoted_price
 
     def _close_position(self, symbol: str, exchange: BaseExchange,
                         current_price: float, reason: str):
@@ -257,17 +288,19 @@ class TradingEngine:
         quantity = pos["quantity"]
 
         try:
-            exchange.place_order(symbol, exit_side, OrderType.MARKET, quantity)
+            order = exchange.place_order(symbol, exit_side, OrderType.MARKET, quantity)
         except Exception as e:
             log.error(f"Exit order failed for {symbol} ({reason}): {e}")
             return
 
+        exit_price = self._fill_price(exchange, order, current_price, symbol)
+
         try:
-            self.risk_manager.close_position(symbol, current_price)
-            self.portfolio.close_trade(symbol, current_price)
+            self.risk_manager.close_position(symbol, exit_price)
+            self.portfolio.close_trade(symbol, exit_price)
             log.info(
                 f"CLOSED: {exit_side.value} {quantity:.6f} {symbol} "
-                f"@ ${current_price:.4f} — reason: {reason}"
+                f"@ ${exit_price:.4f} — reason: {reason}"
             )
         except Exception as e:
             log.error(f"Bookkeeping failed after closing {symbol}: {e}")

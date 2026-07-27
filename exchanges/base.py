@@ -1,10 +1,16 @@
 """Abstract base class for all exchange connectors."""
 
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
+
+# Terminal states — polling further will never produce a fill price.
+_DEAD_ORDER_STATUSES = {
+    "canceled", "cancelled", "rejected", "expired", "done_for_day", "suspended",
+}
 
 
 class OrderSide(Enum):
@@ -137,3 +143,35 @@ class BaseExchange(ABC):
         """Whether fractional quantities are allowed. Equities default to whole
         shares unless the connector says otherwise."""
         return self.market_type != MarketType.STOCK
+
+    def wait_for_fill(self, order: Order, timeout: float = 5.0,
+                      poll_interval: float = 0.25) -> Order:
+        """Poll until the order reports an average fill price.
+
+        A trade must be booked at the price it actually filled at, not the quote
+        observed before submission. A market order crosses the spread, so
+        booking the pre-trade quote credits that spread as profit on both legs
+        of every round trip and makes a losing strategy look profitable.
+
+        Returns the freshest Order state. `filled_price` may still be None if the
+        order has not filled inside `timeout` — callers must handle that.
+        """
+        deadline = time.monotonic() + timeout
+        latest = order
+        while True:
+            try:
+                latest = self.get_order_status(order.id, order.symbol)
+            except Exception:
+                return latest
+            status = str(latest.status).strip().lower()
+            # A large market order fills in pieces, and filled_avg_price only
+            # averages the pieces so far. Wait for the terminal "filled" state so
+            # the booked price covers the whole order, not just the first slice.
+            if status == "filled" and latest.filled_price:
+                return latest
+            if status in _DEAD_ORDER_STATUSES:
+                return latest
+            if time.monotonic() >= deadline:
+                return latest
+            time.sleep(poll_interval)
+
