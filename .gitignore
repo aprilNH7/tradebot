@@ -14,6 +14,7 @@ build/
 logs/
 data/*.csv
 data/*.json
+data/bars/
 .DS_Store
 *.db
 *.sqlite3

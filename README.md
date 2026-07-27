@@ -160,12 +160,74 @@ each casing a caller might pass.
 Any new code comparing a trade side must go through `RiskManager._norm_side()` or
 `RiskManager._is_long()` rather than comparing raw strings.
 
+## Measured performance
+
+**These strategies do not currently have a profitable edge. Do not run them with
+real money.**
+
+Backtested over 129 trading days of 5-minute bars across the stock universe,
+replaying the real `RiskManager` with no lookahead and a 2 bps round-trip spread:
+
+| | Baseline (shipped defaults) |
+|---|---|
+| Round trips | 4,892 |
+| Total return | **-4.47%** |
+| Expectancy / trip | **-$0.91** |
+| Average day | **-$34.68** |
+| Win rate | 44.4% |
+| Profit factor | 0.92 |
+| Max drawdown | 5.12% |
+| t-statistic | -1.83 |
+
+A 32-point sweep over stop-loss, take-profit and minimum-confidence, selected on
+the first 70% of history and scored on the held-out final 30%:
+
+- **4 of 32** configurations were profitable out-of-sample.
+- **0 of 32** were statistically significant out-of-sample (all |t| < 0.7).
+- The best in-sample configuration (4% stop, 2% target, 0.60 confidence) earned
+  $201 over 92 days in-sample and **lost $679 over the following 36 days**.
+
+The four profitable-out-of-sample rows were among the *worst* in-sample, which is
+the signature of noise rather than edge.
+
+Reproduce with:
+
+```bash
+python -m backtest.run --days 180 --target 400          # baseline
+python -m backtest.run --days 180 --target 400 --sweep  # train/test sweep
+```
+
+### Why position sizing has not been raised
+
+Expectancy is negative, so leverage multiplies losses. At the measured
+`-$0.91`/trip and ~38 trips/day, reaching **+$400/day** would require a 183x
+scale-up of a *losing* system — which converts a slow bleed into rapid ruin. The
+sizing knobs (`RISK_MAX_POSITION_SIZE`, `leverage`) are deliberately left at
+their conservative defaults until a configuration clears `t > 1.98`
+out-of-sample.
+
+Where the money actually goes, by exit reason (baseline):
+
+```
+take_profit      107 trips   +$12,932
+grid exits     3,939 trips   +$13,659
+stop_loss        505 trips   -$31,063   <-- the entire loss
+```
+
+Stop-outs average **-$61.5** against **+$3.47** for a grid exit. The strategies
+are being stopped out of positions that the grid logic would otherwise have
+closed profitably. That interaction, not the sizing, is the thing to fix.
+
 ## Architecture
 
 ```
 tradebot/
 ├── main.py                 # CLI entry point
 ├── config/settings.py      # Configuration & environment vars
+├── backtest/
+│   ├── data.py             # Historical bar fetch + on-disk cache
+│   ├── harness.py          # Replay engine (reuses the live RiskManager)
+│   └── run.py              # CLI: baseline report and train/test sweep
 ├── core/
 │   ├── engine.py           # Main trading loop orchestrator
 │   ├── portfolio.py        # Position & P&L tracking
