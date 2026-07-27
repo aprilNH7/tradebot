@@ -8,6 +8,7 @@ from exchanges.base import BaseExchange, OrderSide, OrderType, MarketType
 from strategies.base import BaseStrategy, Signal
 from core.risk_manager import RiskManager
 from core.portfolio import Portfolio, TradeRecord
+from config.settings import settings
 from utils.logger import setup_logger
 
 log = setup_logger("engine")
@@ -20,7 +21,8 @@ class TradingEngine:
         self.risk_manager = RiskManager()
         self.portfolio = Portfolio()
         self.running = False
-        self.scan_interval = 60  # seconds between scans
+        self.scan_interval = settings.SCAN_INTERVAL
+        self.custom_symbols: list[str] = []
         self._symbol_exchange_map: dict[str, str] = {}
 
     def add_exchange(self, name: str, exchange: BaseExchange):
@@ -71,7 +73,7 @@ class TradingEngine:
         ex_name, exchange = result
 
         try:
-            candles = exchange.get_ohlcv(symbol, "1h", 100)
+            candles = exchange.get_ohlcv(symbol, settings.CANDLE_TIMEFRAME, 100)
             ticker = exchange.get_ticker(symbol)
             current_price = ticker.last
         except Exception as e:
@@ -177,7 +179,9 @@ class TradingEngine:
 
     def get_symbols_to_scan(self) -> list[str]:
         """Get all symbols to scan based on connected exchanges."""
-        from config.settings import settings
+        if self.custom_symbols:
+            return self.custom_symbols
+
         symbols = []
         for name, exchange in self.exchanges.items():
             if exchange.market_type == MarketType.CRYPTO:
@@ -186,7 +190,7 @@ class TradingEngine:
                 symbols.extend(settings.STOCK_SYMBOLS)
             elif exchange.market_type == MarketType.FOREX:
                 symbols.extend(settings.FOREX_PAIRS)
-        return list(set(symbols))
+        return sorted(set(symbols))
 
     def run_scan_cycle(self):
         """Run one full scan across all symbols."""
@@ -202,11 +206,11 @@ class TradingEngine:
         status = self.risk_manager.get_status()
         log.info(f"Cycle complete — {status}")
 
-    def start(self, interval: int = 60):
+    def start(self, interval: int = None):
         """Start the trading loop."""
         self.running = True
-        self.scan_interval = interval
-        log.info(f"Engine started — scanning every {interval}s")
+        self.scan_interval = interval or settings.SCAN_INTERVAL
+        log.info(f"Engine started — scanning every {self.scan_interval}s")
 
         while self.running:
             try:
@@ -230,6 +234,8 @@ class TradingEngine:
             "running": self.running,
             "exchanges": {n: e.market_type.value for n, e in self.exchanges.items()},
             "strategies": [s.name for s in self.strategies],
+            "symbols": self.get_symbols_to_scan(),
+            "scan_interval": self.scan_interval,
             "risk": self.risk_manager.get_status(),
             "performance": self.portfolio.get_performance(),
         }

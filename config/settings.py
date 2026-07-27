@@ -4,6 +4,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _csv(key: str, default: list[str]) -> list[str]:
+    """Read a comma-separated env var into a list, falling back to default."""
+    raw = os.getenv(key, "")
+    if not raw.strip():
+        return default
+    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+
+
 class Settings:
     # --- Binance ---
     BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
@@ -29,25 +37,42 @@ class Settings:
     RISK_MAX_POSITION_SIZE = float(os.getenv("RISK_MAX_POSITION_SIZE", "0.05"))
     RISK_STOP_LOSS_PCT = float(os.getenv("RISK_STOP_LOSS_PCT", "0.02"))
     RISK_TAKE_PROFIT_PCT = float(os.getenv("RISK_TAKE_PROFIT_PCT", "0.04"))
+    RISK_MAX_DAILY_TRADES = int(os.getenv("RISK_MAX_DAILY_TRADES", "50"))
+    RISK_MAX_OPEN_POSITIONS = int(os.getenv("RISK_MAX_OPEN_POSITIONS", "10"))
+    RISK_MIN_CONFIDENCE = float(os.getenv("RISK_MIN_CONFIDENCE", "0.30"))
 
     # --- General ---
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5050"))
+    SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "60"))
+    CANDLE_TIMEFRAME = os.getenv("CANDLE_TIMEFRAME", "1h")
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
-    # --- Default Trading Pairs ---
-    CRYPTO_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
-    STOCK_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META"]
-    FOREX_PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD"]
+    # --- Trading Pairs (override via comma-separated env vars) ---
+    CRYPTO_PAIRS = _csv("CRYPTO_PAIRS", [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+        "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
+        "LINK/USDT", "DOT/USDT",
+    ])
+    STOCK_SYMBOLS = _csv("STOCK_SYMBOLS", [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META",
+        "AMD", "NFLX", "SPY", "QQQ", "JPM", "V", "DIS",
+        "COIN", "PLTR", "UBER", "BA", "INTC", "SOFI",
+    ])
+    FOREX_PAIRS = _csv("FOREX_PAIRS", [
+        "EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD",
+        "USD_CAD", "USD_CHF", "NZD_USD", "EUR_GBP",
+    ])
 
     # --- Strategy Defaults ---
-    SMA_FAST_PERIOD = 9
-    SMA_SLOW_PERIOD = 21
-    RSI_PERIOD = 14
-    RSI_OVERBOUGHT = 70
-    RSI_OVERSOLD = 30
-    GRID_LEVELS = 10
-    GRID_SPACING_PCT = 0.005
+    SMA_FAST_PERIOD = int(os.getenv("SMA_FAST_PERIOD", "9"))
+    SMA_SLOW_PERIOD = int(os.getenv("SMA_SLOW_PERIOD", "21"))
+    RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
+    RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "70"))
+    RSI_OVERSOLD = float(os.getenv("RSI_OVERSOLD", "30"))
+    GRID_LEVELS = int(os.getenv("GRID_LEVELS", "10"))
+    GRID_SPACING_PCT = float(os.getenv("GRID_SPACING_PCT", "0.005"))
+    ARBITRAGE_MIN_SPREAD_PCT = float(os.getenv("ARBITRAGE_MIN_SPREAD_PCT", "0.005"))
 
     @classmethod
     def validate(cls):

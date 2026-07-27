@@ -1,5 +1,6 @@
 """Cross-Exchange Arbitrage Strategy — Exploit price differences."""
 
+from config.settings import settings
 from exchanges.base import BaseExchange, OHLCV
 from strategies.base import BaseStrategy, Signal, TradeSignal
 from utils.logger import setup_logger
@@ -10,9 +11,12 @@ log = setup_logger("strategy.arbitrage")
 class ArbitrageStrategy(BaseStrategy):
     name = "arbitrage"
 
-    def __init__(self, min_spread_pct: float = 0.002,
+    def __init__(self, min_spread_pct: float = None,
                  exchanges: list[BaseExchange] = None):
-        self.min_spread_pct = min_spread_pct
+        self.min_spread_pct = (
+            min_spread_pct if min_spread_pct is not None
+            else settings.ARBITRAGE_MIN_SPREAD_PCT
+        )
         self.exchanges = exchanges or []
         self._price_cache: dict[str, dict[str, float]] = {}
 

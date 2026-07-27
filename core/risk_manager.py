@@ -40,8 +40,9 @@ class RiskManager:
         self.max_position_size = settings.RISK_MAX_POSITION_SIZE
         self.stop_loss_pct = settings.RISK_STOP_LOSS_PCT
         self.take_profit_pct = settings.RISK_TAKE_PROFIT_PCT
-        self.max_daily_trades = 50
-        self.max_open_positions = 10
+        self.max_daily_trades = settings.RISK_MAX_DAILY_TRADES
+        self.max_open_positions = settings.RISK_MAX_OPEN_POSITIONS
+        self.min_confidence = settings.RISK_MIN_CONFIDENCE
         self.metrics = RiskMetrics()
         self._active_positions: dict[str, dict] = {}
 
@@ -87,7 +88,7 @@ class RiskManager:
             return False, 0
 
         # Minimum confidence threshold
-        if signal.confidence < 0.3:
+        if signal.confidence < self.min_confidence:
             log.debug(f"Low confidence: {signal.confidence:.2f}")
             return False, 0
 

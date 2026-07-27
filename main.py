@@ -24,9 +24,14 @@ from utils.logger import setup_logger
 log = setup_logger("main", settings.LOG_LEVEL)
 
 
-def build_engine(markets: list[str], strategies: list[str]) -> TradingEngine:
+def build_engine(markets: list[str], strategies: list[str],
+                 symbols: list[str] = None) -> TradingEngine:
     """Build and configure the trading engine."""
     engine = TradingEngine()
+
+    if symbols:
+        engine.custom_symbols = [s.strip().upper() for s in symbols]
+        log.info(f"Symbol override: {', '.join(engine.custom_symbols)}")
 
     # --- Add exchanges ---
     if "crypto" in markets or "all" in markets:
@@ -81,6 +86,7 @@ Examples:
   python main.py --markets all --strategies all
   python main.py --markets crypto --strategies sma rsi
   python main.py --markets stocks --strategies rsi --interval 120
+  python main.py --markets stocks --symbols AAPL TSLA SPY NVDA
   python main.py --status
   python main.py --dashboard
         """,
@@ -98,8 +104,13 @@ Examples:
         help="Strategies to use (default: all)",
     )
     parser.add_argument(
-        "--interval", type=int, default=60,
-        help="Scan interval in seconds (default: 60)",
+        "--symbols", nargs="+", default=None,
+        help="Override the symbol list for this session "
+             "(e.g. AAPL TSLA or BTC/USDT ETH/USDT)",
+    )
+    parser.add_argument(
+        "--interval", type=int, default=settings.SCAN_INTERVAL,
+        help=f"Scan interval in seconds (default: {settings.SCAN_INTERVAL})",
     )
     parser.add_argument(
         "--dashboard", action="store_true",
@@ -123,11 +134,42 @@ Examples:
         print(f"Markets:    {args.markets}")
         print(f"Strategies: {args.strategies}")
         print(f"Interval:   {args.interval}s")
+        print(f"Timeframe:  {settings.CANDLE_TIMEFRAME}")
         print(f"\nExchange Status:")
         print(f"  Binance:  {'OK' if settings.BINANCE_API_KEY else 'NOT CONFIGURED'}")
         print(f"  Coinbase: {'OK' if settings.COINBASE_API_KEY else 'NOT CONFIGURED'}")
         print(f"  Alpaca:   {'OK' if settings.ALPACA_API_KEY else 'NOT CONFIGURED'}")
         print(f"  OANDA:    {'OK' if settings.OANDA_ACCESS_TOKEN else 'NOT CONFIGURED'}")
+
+        print(f"\nWatchlists:")
+        if args.symbols:
+            print(f"  Override ({len(args.symbols)}): "
+                  f"{', '.join(s.upper() for s in args.symbols)}")
+        else:
+            print(f"  Stocks ({len(settings.STOCK_SYMBOLS)}): "
+                  f"{', '.join(settings.STOCK_SYMBOLS)}")
+            print(f"  Crypto ({len(settings.CRYPTO_PAIRS)}): "
+                  f"{', '.join(settings.CRYPTO_PAIRS)}")
+            print(f"  Forex  ({len(settings.FOREX_PAIRS)}): "
+                  f"{', '.join(settings.FOREX_PAIRS)}")
+
+        print(f"\nStrategy Parameters:")
+        print(f"  SMA:  fast={settings.SMA_FAST_PERIOD} slow={settings.SMA_SLOW_PERIOD}")
+        print(f"  RSI:  period={settings.RSI_PERIOD} "
+              f"overbought={settings.RSI_OVERBOUGHT} oversold={settings.RSI_OVERSOLD}")
+        print(f"  Grid: levels={settings.GRID_LEVELS} "
+              f"spacing={settings.GRID_SPACING_PCT:.2%}")
+        print(f"  Arb:  min_spread={settings.ARBITRAGE_MIN_SPREAD_PCT:.2%}")
+
+        print(f"\nRisk Limits:")
+        print(f"  Max drawdown:     {settings.RISK_MAX_DRAWDOWN:.1%}")
+        print(f"  Max position:     {settings.RISK_MAX_POSITION_SIZE:.1%} of portfolio")
+        print(f"  Stop loss:        {settings.RISK_STOP_LOSS_PCT:.1%}")
+        print(f"  Take profit:      {settings.RISK_TAKE_PROFIT_PCT:.1%}")
+        print(f"  Max daily trades: {settings.RISK_MAX_DAILY_TRADES}")
+        print(f"  Max open pos:     {settings.RISK_MAX_OPEN_POSITIONS}")
+        print(f"  Min confidence:   {settings.RISK_MIN_CONFIDENCE:.2f}")
+
         if warnings:
             print(f"\nWarnings:")
             for w in warnings:
@@ -150,7 +192,7 @@ Examples:
         log.warning(w)
 
     # Build engine
-    engine = build_engine(args.markets, args.strategies)
+    engine = build_engine(args.markets, args.strategies, args.symbols)
 
     # Connect to exchanges
     log.info("Connecting to exchanges...")

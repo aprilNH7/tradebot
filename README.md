@@ -59,12 +59,63 @@ python main.py --markets crypto --strategies sma rsi
 # Stocks with RSI, 2-minute scan interval
 python main.py --markets stocks --strategies rsi --interval 120
 
+# Trade only a specific watchlist for this session
+python main.py --markets stocks --symbols AAPL TSLA SPY NVDA
+
 # With live dashboard
 python main.py --markets all --strategies all --dashboard
 
-# Check configuration
+# Check configuration (watchlists, strategy params, risk limits)
 python main.py --status
 ```
+
+## Customizing Symbols
+
+There are two ways to change what the bot trades.
+
+**Permanent — edit `.env`** (comma-separated, applies to every run):
+
+```bash
+STOCK_SYMBOLS=AAPL,MSFT,NVDA,SPY,QQQ,AMD,COIN
+CRYPTO_PAIRS=BTC/USDT,ETH/USDT,SOL/USDT
+FOREX_PAIRS=EUR_USD,GBP_USD,USD_JPY
+```
+
+**One-off — use `--symbols`** (overrides all watchlists for that session):
+
+```bash
+python main.py --markets stocks --symbols AAPL TSLA SPY
+```
+
+Symbols are routed to the right exchange automatically by format:
+`AAPL` → stocks, `BTC/USDT` → crypto, `EUR_USD` → forex.
+
+Defaults: 20 stocks, 10 crypto pairs, 8 forex pairs. Keep the total reasonable —
+each symbol costs 2 API calls per scan cycle, so 20 symbols on a 60s interval is
+40 calls/min (well inside Alpaca's 200/min limit).
+
+## Tuning Strategies
+
+All strategy parameters are read from `.env` — no code changes needed:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `SMA_FAST_PERIOD` | 9 | Lower = more frequent crossovers |
+| `SMA_SLOW_PERIOD` | 21 | Higher = stronger trend confirmation |
+| `RSI_PERIOD` | 14 | Lookback window for RSI |
+| `RSI_OVERBOUGHT` | 70 | Lower = sells earlier |
+| `RSI_OVERSOLD` | 30 | Higher = buys earlier |
+| `GRID_LEVELS` | 10 | Number of grid price levels |
+| `GRID_SPACING_PCT` | 0.005 | Gap between levels (0.5%) |
+| `ARBITRAGE_MIN_SPREAD_PCT` | 0.005 | Minimum spread to act on |
+| `CANDLE_TIMEFRAME` | 1h | Candle size: `1m`, `5m`, `15m`, `1h`, `1d` |
+| `SCAN_INTERVAL` | 60 | Seconds between scan cycles |
+
+**More trades**: lower `RISK_MIN_CONFIDENCE`, shorten `CANDLE_TIMEFRAME` to `15m`,
+narrow the SMA periods (e.g. `5`/`13`).
+
+**Fewer, higher-quality trades**: raise `RISK_MIN_CONFIDENCE` to `0.5+`, widen
+SMA periods (e.g. `20`/`50`), tighten `RSI_OVERSOLD` to `25`.
 
 ## Dashboard
 
@@ -78,16 +129,20 @@ Features:
 
 ## Risk Management
 
-Built-in risk controls:
+Built-in risk controls, all configurable via `.env`:
 
-- **Max drawdown**: Auto-stops trading at 10% drawdown (configurable)
-- **Position sizing**: Kelly-criterion inspired, scaled by signal confidence
-- **Stop-loss**: 2% default per position
-- **Take-profit**: 4% default per position
-- **Daily trade limit**: 50 trades/day
-- **Max positions**: 10 concurrent positions
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RISK_MAX_DRAWDOWN` | 0.10 | Halt all trading at 10% drawdown |
+| `RISK_MAX_POSITION_SIZE` | 0.05 | Max 5% of portfolio per position |
+| `RISK_STOP_LOSS_PCT` | 0.02 | 2% stop-loss per position |
+| `RISK_TAKE_PROFIT_PCT` | 0.04 | 4% take-profit per position |
+| `RISK_MAX_DAILY_TRADES` | 50 | Daily trade cap |
+| `RISK_MAX_OPEN_POSITIONS` | 10 | Concurrent position cap |
+| `RISK_MIN_CONFIDENCE` | 0.30 | Ignore signals below this confidence |
 
-All risk parameters are configurable via `.env`.
+Position sizing is Kelly-criterion inspired and scaled by signal confidence, so a
+0.8-confidence signal takes a larger position than a 0.35-confidence one.
 
 ## Architecture
 
@@ -121,6 +176,8 @@ tradebot/
 
 ## Environment Variables
 
+Credentials (see `.env.example` for the full list):
+
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `BINANCE_API_KEY` | Binance API key | For crypto |
@@ -129,11 +186,13 @@ tradebot/
 | `COINBASE_SECRET_KEY` | Coinbase secret | For crypto |
 | `ALPACA_API_KEY` | Alpaca API key | For stocks |
 | `ALPACA_SECRET_KEY` | Alpaca secret | For stocks |
-| `ALPACA_BASE_URL` | Alpaca API URL | For stocks |
+| `ALPACA_BASE_URL` | Alpaca API URL (paper vs live) | For stocks |
 | `OANDA_ACCOUNT_ID` | OANDA account ID | For forex |
 | `OANDA_ACCESS_TOKEN` | OANDA access token | For forex |
-| `RISK_MAX_DRAWDOWN` | Max drawdown before halt (default: 0.10) | No |
-| `RISK_MAX_POSITION_SIZE` | Max position as % of portfolio (default: 0.05) | No |
+
+Everything else is optional — see [Customizing Symbols](#customizing-symbols),
+[Tuning Strategies](#tuning-strategies), and [Risk Management](#risk-management).
+Run `python main.py --status` to print the fully resolved configuration.
 
 ## Disclaimer
 
