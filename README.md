@@ -144,6 +144,22 @@ Built-in risk controls, all configurable via `.env`:
 Position sizing is Kelly-criterion inspired and scaled by signal confidence, so a
 0.8-confidence signal takes a larger position than a 0.35-confidence one.
 
+## Tests
+
+```bash
+pytest
+```
+
+The suite guards the accounting logic that determines whether the bot makes or
+loses money. `OrderSide.BUY.value` is `"buy"` but `Signal.BUY.value` is `"BUY"`,
+and code that compared sides case-sensitively silently treated every long as a
+short — which inverted reported PnL, fired stop-losses on gains, and disabled the
+duplicate-position guard. Every side comparison is therefore parametrised over
+each casing a caller might pass.
+
+Any new code comparing a trade side must go through `RiskManager._norm_side()` or
+`RiskManager._is_long()` rather than comparing raw strings.
+
 ## Architecture
 
 ```
