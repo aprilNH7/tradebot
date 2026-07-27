@@ -70,9 +70,18 @@ class RSIStrategy(BaseStrategy):
                 take_profit=current_price * (1 + settings.RISK_TAKE_PROFIT_PCT * 1.5),
             )
 
+        # No entry condition met. Label the zone so logs distinguish a genuinely
+        # neutral RSI from one that is stretched but still awaiting a reversal.
+        if current_rsi >= self.overbought:
+            zone = f"overbought ({current_rsi:.1f}) — waiting for reversal"
+        elif current_rsi <= self.oversold:
+            zone = f"oversold ({current_rsi:.1f}) — waiting for bounce"
+        else:
+            zone = f"neutral ({current_rsi:.1f})"
+
         return TradeSignal(
             signal=Signal.HOLD, symbol=symbol, confidence=0.0,
-            strategy=self.name, reason=f"RSI neutral: {current_rsi:.1f}",
+            strategy=self.name, reason=f"RSI {zone}",
         )
 
     def get_params(self) -> dict:

@@ -124,3 +124,16 @@ class BaseExchange(ABC):
     def get_order_status(self, order_id: str, symbol: str) -> Order:
         """Check status of an order."""
         pass
+
+    def is_market_open(self) -> bool:
+        """Whether the market is currently tradeable.
+
+        Crypto and forex run effectively around the clock, so the default is
+        True. Exchanges with session hours (equities) should override this.
+        """
+        return True
+
+    def supports_fractional(self) -> bool:
+        """Whether fractional quantities are allowed. Equities default to whole
+        shares unless the connector says otherwise."""
+        return self.market_type != MarketType.STOCK

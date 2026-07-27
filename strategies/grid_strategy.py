@@ -25,12 +25,18 @@ class GridStrategy(BaseStrategy):
         return self.grid_prices[symbol]
 
     def _find_nearest_levels(self, price: float,
-                             grid: list[float]) -> tuple[float, float]:
+                             grid: list[float]) -> tuple[float | None, float | None]:
+        """Bracket `price` between grid levels.
+
+        Returns (below, above); either side is None when the price has moved
+        outside the grid. Clamping both sides to the same boundary level would
+        make the buy and sell checks indistinguishable — and since the buy
+        branch is tested first, a price just above the top of the grid would
+        fire a BUY at the highest level.
+        """
         below = [g for g in grid if g < price]
         above = [g for g in grid if g > price]
-        nearest_below = below[-1] if below else grid[0]
-        nearest_above = above[0] if above else grid[-1]
-        return nearest_below, nearest_above
+        return (below[-1] if below else None), (above[0] if above else None)
 
     def analyze(self, symbol: str, candles: list[OHLCV],
                 current_price: float) -> TradeSignal:
@@ -46,6 +52,19 @@ class GridStrategy(BaseStrategy):
 
         buy_level, sell_level = self._find_nearest_levels(current_price, grid)
         last = self.last_action.get(symbol, "none")
+
+        # Price has left the grid — it re-centers on the moving average next
+        # cycle, so wait rather than trading against an invalid level.
+        if buy_level is None or sell_level is None:
+            edge = "below" if buy_level is None else "above"
+            return TradeSignal(
+                signal=Signal.HOLD, symbol=symbol, confidence=0.0,
+                strategy=self.name,
+                reason=(
+                    f"Price ${current_price:.4f} is {edge} the grid "
+                    f"(${grid[0]:.4f}–${grid[-1]:.4f}) — waiting for re-centering"
+                ),
+            )
 
         # Price hit buy level
         proximity_buy = abs(current_price - buy_level) / current_price

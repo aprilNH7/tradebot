@@ -1,6 +1,7 @@
 """Alpaca exchange connector for US stocks."""
 
-from datetime import datetime
+import math
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import alpaca_trade_api as tradeapi
@@ -47,13 +48,32 @@ class AlpacaExchange(BaseExchange):
             timestamp=datetime.now(),
         )
 
+    # Approximate bars produced per trading day, used to size the lookback
+    # window so we always come back with enough history for the indicators.
+    _BARS_PER_DAY = {"1Min": 390, "5Min": 78, "15Min": 26, "1Hour": 7, "1Day": 1}
+
     def get_ohlcv(self, symbol: str, timeframe: str = "1h",
                   limit: int = 100) -> list[OHLCV]:
         tf_map = {"1m": "1Min", "5m": "5Min", "15m": "15Min",
                   "1h": "1Hour", "1d": "1Day"}
         tf = tf_map.get(timeframe, "1Hour")
-        bars = self.client.get_bars(symbol, tf, limit=limit).df
-        return [
+
+        # Without an explicit start, Alpaca only returns the current day —
+        # roughly 7 hourly bars, far short of what a 21-period SMA needs.
+        per_day = self._BARS_PER_DAY.get(tf, 7)
+        trading_days = math.ceil(limit / per_day)
+        # ~1.45x for weekends plus padding for holidays and half-days
+        lookback = math.ceil(trading_days * 1.45) + 5
+        start = (datetime.now(timezone.utc) - timedelta(days=lookback)).date()
+
+        bars = self.client.get_bars(symbol, tf, start=start.isoformat()).df
+        if bars.empty:
+            log.warning(f"No bars returned for {symbol} ({tf} since {start})")
+            return []
+
+        # get_bars fills forward from `start`, so trim to the newest candles
+        bars = bars.tail(limit)
+        candles = [
             OHLCV(
                 timestamp=idx.to_pydatetime(),
                 open=row["open"], high=row["high"],
@@ -62,6 +82,9 @@ class AlpacaExchange(BaseExchange):
             )
             for idx, row in bars.iterrows()
         ]
+        if len(candles) < limit:
+            log.debug(f"{symbol}: {len(candles)}/{limit} candles available")
+        return candles
 
     def get_balance(self) -> dict:
         account = self.client.get_account()
@@ -75,10 +98,16 @@ class AlpacaExchange(BaseExchange):
     def place_order(self, symbol: str, side: OrderSide,
                     order_type: OrderType, quantity: float,
                     price: Optional[float] = None) -> Order:
+        qty = int(quantity)
+        if qty < 1:
+            raise ValueError(
+                f"{symbol}: quantity {quantity:.4f} rounds to 0 whole shares"
+            )
+
         ot = "market" if order_type == OrderType.MARKET else "limit"
         params = {
             "symbol": symbol,
-            "qty": int(quantity),
+            "qty": qty,
             "side": side.value,
             "type": ot,
             "time_in_force": "day",
@@ -87,16 +116,24 @@ class AlpacaExchange(BaseExchange):
             params["limit_price"] = price
 
         result = self.client.submit_order(**params)
-        log.info(f"Order placed: {side.value} {quantity} {symbol}")
+        log.info(f"Order placed: {side.value} {qty} {symbol}")
         return Order(
             id=result.id,
             symbol=symbol,
             side=side,
             order_type=order_type,
-            quantity=quantity,
+            quantity=float(qty),
             price=price,
             status=result.status,
         )
+
+    def is_market_open(self) -> bool:
+        """Query Alpaca's clock so we don't trade on stale closed-market data."""
+        try:
+            return bool(self.client.get_clock().is_open)
+        except Exception as e:
+            log.warning(f"Market clock check failed, assuming closed: {e}")
+            return False
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         try:

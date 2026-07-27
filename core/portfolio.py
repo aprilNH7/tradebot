@@ -44,7 +44,9 @@ class Portfolio:
             if trade.symbol == symbol and trade.exit_price is None:
                 trade.exit_price = exit_price
                 trade.exit_time = datetime.now()
-                if trade.side == "BUY":
+                # Case-insensitive: callers pass OrderSide.value ("buy") while
+                # the Signal enum uses "BUY".
+                if trade.side.strip().lower() == "buy":
                     trade.pnl = (exit_price - trade.entry_price) * trade.quantity
                 else:
                     trade.pnl = (trade.entry_price - exit_price) * trade.quantity

@@ -99,28 +99,40 @@ class RiskManager:
         # Don't add to existing position in same direction
         existing = self._active_positions.get(signal.symbol)
         if existing:
-            if existing["side"] == signal.signal.value:
+            if existing["side"] == self._norm_side(signal.signal.value):
                 log.debug(f"Already in {signal.signal.value} position for {signal.symbol}")
                 return False, 0
 
         return True, adjusted_size
 
     def register_trade(self, symbol: str, side: str, quantity: float,
-                       entry_price: float):
+                       entry_price: float, count_toward_limits: bool = True):
         self._active_positions[symbol] = {
-            "side": side,
+            # Normalised because callers pass either OrderSide.value ("buy")
+            # or Signal.value ("BUY") — comparing raw values silently fails.
+            "side": self._norm_side(side),
             "quantity": quantity,
             "entry_price": entry_price,
             "timestamp": datetime.now(),
         }
-        self.metrics.daily_trades += 1
-        self.metrics.total_trades += 1
+        # Positions adopted from the exchange on startup were not opened by this
+        # session, so they must not consume the daily trade budget.
+        if count_toward_limits:
+            self.metrics.daily_trades += 1
+            self.metrics.total_trades += 1
+
+    @staticmethod
+    def _norm_side(side: str) -> str:
+        return side.strip().lower()
+
+    def _is_long(self, pos: dict) -> bool:
+        return pos["side"] == "buy"
 
     def close_position(self, symbol: str, exit_price: float):
         pos = self._active_positions.pop(symbol, None)
         if not pos:
             return
-        if pos["side"] == "BUY":
+        if self._is_long(pos):
             pnl = (exit_price - pos["entry_price"]) * pos["quantity"]
         else:
             pnl = (pos["entry_price"] - exit_price) * pos["quantity"]
@@ -133,13 +145,20 @@ class RiskManager:
             self.metrics.losing_trades += 1
         log.info(f"Closed {symbol}: PnL ${pnl:.2f}")
 
+    def get_position(self, symbol: str) -> dict | None:
+        """Return the tracked open position for a symbol, if any."""
+        return self._active_positions.get(symbol)
+
+    def has_position(self, symbol: str) -> bool:
+        return symbol in self._active_positions
+
     def check_stop_loss(self, symbol: str, current_price: float) -> bool:
         """Returns True if stop-loss hit and position should be closed."""
         pos = self._active_positions.get(symbol)
         if not pos:
             return False
 
-        if pos["side"] == "BUY":
+        if self._is_long(pos):
             loss_pct = (pos["entry_price"] - current_price) / pos["entry_price"]
         else:
             loss_pct = (current_price - pos["entry_price"]) / pos["entry_price"]
@@ -155,7 +174,7 @@ class RiskManager:
         if not pos:
             return False
 
-        if pos["side"] == "BUY":
+        if self._is_long(pos):
             gain_pct = (current_price - pos["entry_price"]) / pos["entry_price"]
         else:
             gain_pct = (pos["entry_price"] - current_price) / pos["entry_price"]
@@ -169,6 +188,22 @@ class RiskManager:
         self.metrics.daily_pnl = 0.0
         self.metrics.daily_trades = 0
         self.metrics.last_reset = datetime.now()
+
+    def maybe_reset_daily(self) -> bool:
+        """Reset daily counters when the calendar day rolls over.
+
+        Without this the daily trade limit is a one-way latch: once the bot
+        hits max_daily_trades it stays blocked until the process restarts.
+        """
+        if datetime.now().date() > self.metrics.last_reset.date():
+            log.info(
+                f"New trading day — resetting daily counters "
+                f"(prev: {self.metrics.daily_trades} trades, "
+                f"${self.metrics.daily_pnl:.2f} PnL)"
+            )
+            self.reset_daily()
+            return True
+        return False
 
     def get_status(self) -> dict:
         return {
