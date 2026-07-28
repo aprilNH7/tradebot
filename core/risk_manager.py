@@ -1,7 +1,8 @@
 """Risk Manager — Position sizing, drawdown control, stop-loss enforcement."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, date
+from typing import Optional
 
 from config.settings import settings
 from strategies.base import TradeSignal, Signal
@@ -22,6 +23,10 @@ class RiskMetrics:
     daily_pnl: float = 0.0
     daily_trades: int = 0
     last_reset: datetime = field(default_factory=datetime.now)
+    # Equity at the start of the current trading day. The daily loss cap is
+    # measured against this rather than against realised PnL so that an open
+    # position bleeding out counts against the cap immediately.
+    day_start_balance: float = 0.0
 
     @property
     def win_rate(self) -> float:
@@ -33,6 +38,19 @@ class RiskMetrics:
             return 0.0
         return (self.peak_balance - self.current_balance) / self.peak_balance
 
+    @property
+    def daily_loss(self) -> float:
+        """Dollars lost today — mark-to-market, never negative.
+
+        Prefers the equity delta because that includes unrealised losses. Falls
+        back to realised daily PnL when no balance feed has reported yet (the
+        backtest harness and unit tests run this way), so the cap still binds
+        instead of silently reading zero.
+        """
+        if self.day_start_balance > 0 and self.current_balance > 0:
+            return max(0.0, self.day_start_balance - self.current_balance)
+        return max(0.0, -self.daily_pnl)
+
 
 class RiskManager:
     def __init__(self):
@@ -43,19 +61,63 @@ class RiskManager:
         self.max_daily_trades = settings.RISK_MAX_DAILY_TRADES
         self.max_open_positions = settings.RISK_MAX_OPEN_POSITIONS
         self.min_confidence = settings.RISK_MIN_CONFIDENCE
+        self.max_daily_loss = settings.RISK_MAX_DAILY_LOSS
         self.metrics = RiskMetrics()
         self._active_positions: dict[str, dict] = {}
+        # Date the kill-switch latched. Kept as a date, not a bool, so a stale
+        # halt cannot survive into the next session.
+        self._halted_on: Optional[date] = None
 
     def update_balance(self, balance: float):
         self.metrics.current_balance = balance
         if balance > self.metrics.peak_balance:
             self.metrics.peak_balance = balance
+        # Anchor the day's opening equity on the first reading we ever get.
+        if self.metrics.day_start_balance <= 0:
+            self.metrics.day_start_balance = balance
         dd = self.metrics.drawdown_pct
         if dd > self.metrics.max_drawdown:
             self.metrics.max_drawdown = dd
+        # Evaluate the cap on every equity refresh so the halt latches the moment
+        # the floor is breached, not on the next signal.
+        self._check_daily_loss()
+
+    def _check_daily_loss(self) -> bool:
+        """Latch the kill-switch if today's loss has reached the cap.
+
+        Latching matters: without it a position that bounces back above the
+        threshold would silently re-enable trading on the same day that already
+        proved the strategy was wrong.
+        """
+        if self.max_daily_loss <= 0 or self.is_halted:
+            return self.is_halted
+
+        loss = self.metrics.daily_loss
+        if loss >= self.max_daily_loss:
+            self._halted_on = datetime.now().date()
+            log.error(
+                f"KILL-SWITCH TRIPPED — down ${loss:,.2f} today "
+                f"(cap ${self.max_daily_loss:,.2f}). No new positions until "
+                f"the next trading day. Open positions stay stop-managed."
+            )
+            return True
+        return False
+
+    @property
+    def is_halted(self) -> bool:
+        """True while the daily kill-switch is latched for the current day."""
+        return self._halted_on is not None and self._halted_on >= datetime.now().date()
 
     def can_trade(self) -> tuple[bool, str]:
         """Check if trading is allowed based on risk limits."""
+        # Daily loss cap — checked first because it is the hardest floor.
+        if self._check_daily_loss():
+            msg = (
+                f"Daily loss cap hit: ${self.metrics.daily_loss:,.2f} "
+                f">= ${self.max_daily_loss:,.2f} — halted for the day"
+            )
+            return False, msg
+
         # Drawdown check
         if self.metrics.drawdown_pct >= self.max_drawdown:
             msg = f"Max drawdown reached: {self.metrics.drawdown_pct:.2%} >= {self.max_drawdown:.2%}"
@@ -144,6 +206,10 @@ class RiskManager:
         else:
             self.metrics.losing_trades += 1
         log.info(f"Closed {symbol}: PnL ${pnl:.2f}")
+        # Realising a loss can be what breaches the cap, and there may be no
+        # equity refresh until the next cycle. Re-check now so the halt is not
+        # delayed by a whole scan interval.
+        self._check_daily_loss()
 
     def get_position(self, symbol: str) -> dict | None:
         """Return the tracked open position for a symbol, if any."""
@@ -188,12 +254,19 @@ class RiskManager:
         self.metrics.daily_pnl = 0.0
         self.metrics.daily_trades = 0
         self.metrics.last_reset = datetime.now()
+        # Re-anchor the day's opening equity, otherwise yesterday's losses keep
+        # counting against today's cap and the bot never trades again.
+        self.metrics.day_start_balance = self.metrics.current_balance
+        if self._halted_on is not None:
+            log.info("New day — daily loss kill-switch released")
+        self._halted_on = None
 
     def maybe_reset_daily(self) -> bool:
         """Reset daily counters when the calendar day rolls over.
 
         Without this the daily trade limit is a one-way latch: once the bot
         hits max_daily_trades it stays blocked until the process restarts.
+        The same applies to the daily loss kill-switch.
         """
         if datetime.now().date() > self.metrics.last_reset.date():
             log.info(
@@ -211,6 +284,9 @@ class RiskManager:
             "win_rate": f"{self.metrics.win_rate:.1%}",
             "total_pnl": f"${self.metrics.total_pnl:.2f}",
             "daily_pnl": f"${self.metrics.daily_pnl:.2f}",
+            "daily_loss": f"${self.metrics.daily_loss:.2f}",
+            "daily_loss_cap": f"${self.max_daily_loss:.2f}",
+            "halted": self.is_halted,
             "max_drawdown": f"{self.metrics.max_drawdown:.2%}",
             "open_positions": len(self._active_positions),
             "daily_trades": self.metrics.daily_trades,

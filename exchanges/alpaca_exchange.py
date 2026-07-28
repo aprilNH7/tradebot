@@ -167,5 +167,6 @@ class AlpacaExchange(BaseExchange):
             quantity=float(o.qty),
             price=float(o.limit_price) if o.limit_price else None,
             filled_price=float(o.filled_avg_price) if o.filled_avg_price else None,
+            filled_quantity=float(o.filled_qty) if o.filled_qty is not None else None,
             status=o.status,
         )

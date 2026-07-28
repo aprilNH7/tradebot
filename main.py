@@ -62,7 +62,18 @@ def build_engine(markets: list[str], strategies: list[str],
         engine.add_strategy(SMACrossoverStrategy())
     if "rsi" in strategies or "all" in strategies:
         engine.add_strategy(RSIStrategy())
-    if "grid" in strategies or "all" in strategies:
+    # Grid is deliberately excluded from "all". Over 180 days of real hourly
+    # bars it produced 96% of all trade volume and lost $2,468 gross — before
+    # any fees. Its payoff is structurally inverted: it takes small profits and
+    # holds large losses, needing roughly a 95% win rate to break even against
+    # an actual 44%. Removing it from the 20-symbol backtest recovered $4,019.
+    # Still selectable by name for experiments, but never by default.
+    if "grid" in strategies:
+        log.warning(
+            "Grid strategy enabled explicitly — backtested at -$2,468 gross "
+            "over 180 days and responsible for 96% of trade volume. "
+            "Not recommended with real money."
+        )
         engine.add_strategy(GridStrategy())
     if "arbitrage" in strategies or "all" in strategies:
         if len(crypto_exchanges) >= 2:
@@ -169,6 +180,18 @@ Examples:
         print(f"  Max daily trades: {settings.RISK_MAX_DAILY_TRADES}")
         print(f"  Max open pos:     {settings.RISK_MAX_OPEN_POSITIONS}")
         print(f"  Min confidence:   {settings.RISK_MIN_CONFIDENCE:.2f}")
+        if settings.RISK_MAX_DAILY_LOSS > 0:
+            print(f"  Daily loss cap:   ${settings.RISK_MAX_DAILY_LOSS:,.2f} "
+                  f"(halts new entries for the day)")
+        else:
+            print(f"  Daily loss cap:   DISABLED")
+
+        print(f"\nExecution:")
+        print(f"  Entry orders:     {settings.ENTRY_ORDER_TYPE}"
+              + (f" ({settings.LIMIT_PRICE_MODE}, "
+                 f"{settings.LIMIT_ENTRY_TIMEOUT:g}s then cancel)"
+                 if settings.ENTRY_ORDER_TYPE == "limit" else ""))
+        print(f"  Exit orders:      market (guaranteed fill for stops)")
 
         if warnings:
             print(f"\nWarnings:")

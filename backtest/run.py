@@ -20,12 +20,16 @@ log = setup_logger("backtest.run")
 
 
 def build_strategies(names):
+    """Mirror main.build_engine's selection so the backtest measures the bot
+    that actually runs. "all" excludes grid in both places; naming it directly
+    still loads it so its numbers stay reproducible.
+    """
     out = []
     if "sma" in names or "all" in names:
         out.append(SMACrossoverStrategy())
     if "rsi" in names or "all" in names:
         out.append(RSIStrategy())
-    if "grid" in names or "all" in names:
+    if "grid" in names:
         out.append(GridStrategy())
     return out
 
@@ -107,6 +111,11 @@ def main():
     ap.add_argument("--strategies", nargs="*", default=["all"])
     ap.add_argument("--capital", type=float, default=100_000.0)
     ap.add_argument("--spread-bps", type=float, default=2.0)
+    ap.add_argument(
+        "--passive-entries", action="store_true",
+        help="Model resting limit entries that pay no spread. UPPER BOUND only: "
+             "assumes every passive order fills, which live they will not.",
+    )
     ap.add_argument("--target", type=float, default=400.0)
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--sweep", action="store_true")
@@ -132,8 +141,11 @@ def main():
     strategies = build_strategies(args.strategies)
 
     base = Backtester(strategies, bars, initial_capital=args.capital,
-                      spread_bps=args.spread_bps).run()
-    report(base, args.target, "BASELINE (current settings)")
+                      spread_bps=args.spread_bps,
+                      passive_entries=args.passive_entries).run()
+    label = ("BASELINE (passive entries — UPPER BOUND, assumes every rest fills)"
+             if args.passive_entries else "BASELINE (current settings)")
+    report(base, args.target, label)
 
     if not args.sweep:
         return

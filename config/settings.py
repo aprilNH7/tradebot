@@ -41,6 +41,29 @@ class Settings:
     RISK_MAX_OPEN_POSITIONS = int(os.getenv("RISK_MAX_OPEN_POSITIONS", "10"))
     RISK_MIN_CONFIDENCE = float(os.getenv("RISK_MIN_CONFIDENCE", "0.30"))
 
+    # Hard dollar floor for a single day. Measured against the day's opening
+    # equity, so it captures unrealised losses too — a position sitting 5% under
+    # water counts immediately instead of only when it is finally closed.
+    # Once tripped the bot stops opening positions for the rest of the calendar
+    # day; it keeps managing exits so existing stops still fire.
+    # Set to 0 to disable (not recommended — the max-drawdown check alone lets a
+    # single bad session run down 10% of the account before it reacts).
+    RISK_MAX_DAILY_LOSS = float(os.getenv("RISK_MAX_DAILY_LOSS", "200"))
+
+    # --- Order Execution ---
+    # Entries post passively instead of crossing the spread. Market entries pay
+    # the full spread on the way in and again on the way out; over 4,892 round
+    # trips in the 180-day backtest that cost was the single largest controllable
+    # drag (~$17/day). Set to "market" to go back to crossing.
+    ENTRY_ORDER_TYPE = os.getenv("ENTRY_ORDER_TYPE", "limit").strip().lower()
+    # "passive" rests at the bid (buys) / ask (sells) and pays no spread.
+    # "mid" splits the spread for a better fill rate at half the saving.
+    LIMIT_PRICE_MODE = os.getenv("LIMIT_PRICE_MODE", "passive").strip().lower()
+    # How long to leave a resting entry before cancelling it. Unfilled entries
+    # are abandoned rather than chased — these signals have no edge worth paying
+    # up for, and chasing reintroduces the cost this change removes.
+    LIMIT_ENTRY_TIMEOUT = float(os.getenv("LIMIT_ENTRY_TIMEOUT", "20"))
+
     # --- General ---
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5050"))

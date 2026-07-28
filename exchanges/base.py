@@ -61,6 +61,25 @@ class Order:
     filled_price: Optional[float] = None
     status: str = "pending"
     timestamp: datetime = field(default_factory=datetime.now)
+    # How much actually filled. Market orders fill whole, but a resting limit
+    # order can fill in part and then be cancelled, leaving a position smaller
+    # than the one requested. Booking the requested size in that case would make
+    # the exit order too large — on a long that overshoots into an accidental
+    # short. None means the venue did not report it.
+    filled_quantity: Optional[float] = None
+
+    def effective_filled_quantity(self) -> float:
+        """Quantity we can actually prove is on the books.
+
+        Falls back to the requested size only when the venue reports the order
+        as fully filled. Anything unknown counts as zero, so an unreported
+        partial can never be mistaken for a complete fill.
+        """
+        if self.filled_quantity is not None:
+            return max(0.0, float(self.filled_quantity))
+        if str(self.status).strip().lower() == "filled":
+            return float(self.quantity)
+        return 0.0
 
 
 @dataclass

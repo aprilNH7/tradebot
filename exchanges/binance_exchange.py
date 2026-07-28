@@ -123,5 +123,6 @@ class BinanceExchange(BaseExchange):
             quantity=o["amount"],
             price=o.get("price"),
             filled_price=o.get("average"),
+            filled_quantity=o.get("filled"),
             status=o["status"],
         )

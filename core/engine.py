@@ -1,5 +1,6 @@
 """Trading Engine — Main orchestrator that ties everything together."""
 
+import math
 import time
 from datetime import datetime
 from typing import Optional
@@ -187,11 +188,120 @@ class TradingEngine:
             return
 
         # Execute trade
-        self._execute_signal(symbol, exchange, ex_name, best_signal, size, current_price)
+        self._execute_signal(symbol, exchange, ex_name, best_signal, size,
+                             current_price, ticker)
+
+    # ------------------------------------------------------------------
+    # Entry pricing
+    # ------------------------------------------------------------------
+
+    def _entry_order_spec(self, side: OrderSide, ticker,
+                          current_price: float) -> tuple[OrderType, Optional[float]]:
+        """Decide how an entry is priced.
+
+        A market order crosses the spread on the way in and the exit crosses it
+        again on the way out. Measured over 4,892 round trips that round-trip
+        cost was larger than the strategies' entire gross edge. Resting the
+        entry on the passive side of the book removes the entry half outright;
+        the trade simply does not happen if nobody comes to us, which is the
+        correct outcome for a signal with no proven edge.
+        """
+        if settings.ENTRY_ORDER_TYPE == "market":
+            return OrderType.MARKET, None
+
+        bid = getattr(ticker, "bid", 0.0) or 0.0
+        ask = getattr(ticker, "ask", 0.0) or 0.0
+
+        # A crossed or missing quote means the feed is stale. Resting at the last
+        # trade is still passive and avoids posting a nonsense price.
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return OrderType.LIMIT, self._round_tick(current_price, side)
+
+        if settings.LIMIT_PRICE_MODE == "mid":
+            return OrderType.LIMIT, self._round_tick((bid + ask) / 2.0, side)
+
+        # Passive: join the near side and pay nothing for the spread.
+        return OrderType.LIMIT, self._round_tick(
+            bid if side == OrderSide.BUY else ask, side
+        )
+
+    @staticmethod
+    def _round_tick(price: float, side: OrderSide) -> float:
+        """Snap to a valid tick, always rounding to our advantage.
+
+        Venues reject sub-penny limits on shares priced over $1. Rounding a buy
+        up or a sell down would also quietly cross the spread we are trying to
+        avoid, so each side is rounded away from the market.
+        """
+        decimals = 2 if price >= 1.0 else 4
+        factor = 10 ** decimals
+        if side == OrderSide.BUY:
+            return math.floor(price * factor) / factor
+        return math.ceil(price * factor) / factor
+
+    def _settle_entry(self, exchange: BaseExchange, order, symbol: str,
+                      quoted_price: float,
+                      requested_qty: float) -> tuple[Optional[float], float]:
+        """Resolve a submitted entry into (fill_price, filled_qty).
+
+        Returns (None, 0) when nothing filled. A resting order that never fills
+        must leave no trace in the books — booking the quoted price here, which
+        is what the old market-order path did on timeout, would invent a
+        position the account does not hold and later fire an exit order against
+        thin air.
+        """
+        if order.order_type == OrderType.MARKET:
+            price = self._fill_price(exchange, order, quoted_price, symbol)
+            return price, requested_qty
+
+        try:
+            latest = exchange.wait_for_fill(
+                order, timeout=settings.LIMIT_ENTRY_TIMEOUT
+            )
+        except Exception as e:
+            log.warning(f"{symbol}: fill lookup failed ({e}) — cancelling entry")
+            latest = order
+
+        filled_qty = latest.effective_filled_quantity()
+        if filled_qty > 0 and latest.filled_price:
+            if filled_qty < requested_qty:
+                log.info(
+                    f"{symbol}: partial fill {filled_qty:g}/{requested_qty:g} "
+                    f"@ ${latest.filled_price:.4f} — cancelling the remainder"
+                )
+                exchange.cancel_order(order.id, symbol)
+            return latest.filled_price, filled_qty
+
+        # Nothing filled inside the window. Cancel, then re-read: a fill can land
+        # between the last poll and the cancel, and a stale "unfilled" verdict
+        # would leave an untracked live position.
+        exchange.cancel_order(order.id, symbol)
+        try:
+            final = exchange.get_order_status(order.id, symbol)
+        except Exception as e:
+            log.error(
+                f"{symbol}: could not confirm cancel ({e}) — treating as unfilled. "
+                f"Verify order {order.id} manually."
+            )
+            return None, 0.0
+
+        final_qty = final.effective_filled_quantity()
+        if final_qty > 0 and final.filled_price:
+            log.info(
+                f"{symbol}: filled {final_qty:g} @ ${final.filled_price:.4f} "
+                f"during cancel — booking it"
+            )
+            return final.filled_price, final_qty
+
+        log.info(
+            f"{symbol}: entry did not fill at ${order.price:.4f} within "
+            f"{settings.LIMIT_ENTRY_TIMEOUT:g}s — cancelled, no position taken"
+        )
+        return None, 0.0
 
     def _execute_signal(self, symbol: str, exchange: BaseExchange,
                         ex_name: str, signal, size: float,
-                        current_price: float):
+                        current_price: float, ticker=None):
         """Execute a trade based on a signal."""
         if current_price <= 0:
             return
@@ -215,30 +325,43 @@ class TradingEngine:
             self._close_position(symbol, exchange, current_price, signal.strategy)
             return
 
+        order_type, limit_price = self._entry_order_spec(side, ticker, current_price)
+
         try:
             order = exchange.place_order(
-                symbol, side, OrderType.MARKET, quantity
+                symbol, side, order_type, quantity, limit_price
             )
-            entry_price = self._fill_price(exchange, order, current_price, symbol)
-            log.info(
-                f"EXECUTED: {side.value} {quantity:.6f} {symbol} @ ${entry_price:.4f} "
-                f"[{signal.strategy}] confidence={signal.confidence:.2f}"
-            )
-
-            self.risk_manager.register_trade(
-                symbol, side.value, quantity, entry_price
-            )
-            self.portfolio.record_trade(TradeRecord(
-                symbol=symbol,
-                side=side.value,
-                quantity=quantity,
-                entry_price=entry_price,
-                strategy=signal.strategy,
-                market=exchange.market_type.value,
-            ))
-
         except Exception as e:
             log.error(f"Order failed for {symbol}: {e}")
+            return
+
+        entry_price, filled_qty = self._settle_entry(
+            exchange, order, symbol, current_price, quantity
+        )
+        if entry_price is None or filled_qty <= 0:
+            return
+
+        saved = ""
+        if order_type == OrderType.LIMIT and current_price > 0:
+            edge = (current_price - entry_price) * filled_qty
+            if abs(edge) > 1e-9:
+                saved = f" (vs last ${current_price:.4f}: ${edge:+,.2f})"
+        log.info(
+            f"EXECUTED: {side.value} {filled_qty:.6f} {symbol} @ ${entry_price:.4f} "
+            f"[{signal.strategy}] confidence={signal.confidence:.2f}{saved}"
+        )
+
+        self.risk_manager.register_trade(
+            symbol, side.value, filled_qty, entry_price
+        )
+        self.portfolio.record_trade(TradeRecord(
+            symbol=symbol,
+            side=side.value,
+            quantity=filled_qty,
+            entry_price=entry_price,
+            strategy=signal.strategy,
+            market=exchange.market_type.value,
+        ))
 
     def _fill_price(self, exchange: BaseExchange, order, quoted_price: float,
                     symbol: str) -> float:
@@ -277,6 +400,12 @@ class TradingEngine:
         The books are only updated after the exchange accepts the exit, so a
         rejected order can't leave the bot believing it is flat while it still
         holds risk.
+
+        Exits stay market orders even though entries do not. A resting exit is
+        an exit that might not happen, and the one place that is guaranteed to
+        bite is a stop-loss in a fast move — precisely when the position is
+        running away. Paying the spread to guarantee the exit is cheaper than
+        the tail it prevents.
         """
         pos = self.risk_manager.get_position(symbol)
         if not pos:
@@ -370,6 +499,17 @@ class TradingEngine:
                 self.portfolio.set_initial_capital(portfolio_value)
 
         log.info(f"Scanning {len(symbols)} symbols... equity=${portfolio_value:,.2f}")
+
+        # Say it once per cycle rather than once per blocked signal. Scanning
+        # continues while halted so stops and targets on open positions still
+        # fire — only new entries are refused.
+        if self.risk_manager.is_halted:
+            log.warning(
+                f"HALTED for the day — down "
+                f"${self.risk_manager.metrics.daily_loss:,.2f} of a "
+                f"${self.risk_manager.max_daily_loss:,.2f} cap. "
+                f"Managing exits only."
+            )
 
         for symbol in symbols:
             try:

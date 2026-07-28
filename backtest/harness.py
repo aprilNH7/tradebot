@@ -46,10 +46,24 @@ class Trip:
     pnl: float
     strategy: str
     exit_reason: str
+    # Excursions as signed fractions of entry price, measured on bar extremes
+    # while the position was open. mae <= 0 <= mfe. These are what a stop level
+    # should be derived from — a stop tighter than the typical winner's adverse
+    # excursion converts winners into losers by construction.
+    mae_pct: float = 0.0
+    mfe_pct: float = 0.0
+    bars_held: int = 0
 
     @property
     def notional(self) -> float:
         return self.entry_price * self.quantity
+
+    @property
+    def return_pct(self) -> float:
+        if self.entry_price == 0:
+            return 0.0
+        raw = (self.exit_price - self.entry_price) / self.entry_price
+        return raw if self.side == "buy" else -raw
 
 
 @dataclass
@@ -184,6 +198,8 @@ class Backtester:
                  warmup: int = 25,
                  whole_shares: bool = True,
                  leverage: float = 1.0,
+                 honor_signal_levels: bool = False,
+                 passive_entries: bool = False,
                  risk_overrides: Optional[dict] = None):
         self.strategies = strategies
         self.bars = bars
@@ -196,6 +212,16 @@ class Backtester:
         # account. This is the knob that answers "what leverage does $400/day
         # need", so it must be an explicit input, never an emergent accident.
         self.leverage = leverage
+        # When True the harness reads TradeSignal.stop_loss / .take_profit, which
+        # the live engine currently ignores entirely.
+        self.honor_signal_levels = honor_signal_levels
+        # Entries rest on the passive side instead of crossing, so they pay no
+        # spread. This is an UPPER BOUND, not a forecast: the harness assumes
+        # every passive order fills, whereas live a good share of them will not
+        # and those trades simply never happen. Read the delta as "the most this
+        # change can be worth", never as expected PnL.
+        self.passive_entries = passive_entries
+        self.entry_half_spread = 0.0 if passive_entries else self.half_spread
         self.risk_overrides = risk_overrides or {}
 
     # -- fills ------------------------------------------------------------
@@ -205,6 +231,12 @@ class Backtester:
     def _sell_fill(self, price: float) -> float:
         return price * (1.0 - self.half_spread)
 
+    def _entry_fill(self, price: float, is_buy: bool) -> float:
+        """Opening fill. Exits keep crossing because the live bot still uses
+        market orders for them — a stop that might not fill is not a stop."""
+        edge = self.entry_half_spread
+        return price * (1.0 + edge) if is_buy else price * (1.0 - edge)
+
     def _make_risk_manager(self) -> RiskManager:
         rm = RiskManager()
         for k, v in self.risk_overrides.items():
@@ -213,6 +245,44 @@ class Backtester:
             setattr(rm, k, v)
         rm.update_balance(self.initial_capital)
         return rm
+
+    def _exit_levels(self, pos: dict, rm) -> tuple[Optional[float], Optional[float]]:
+        """Resolve the stop and target price for an open position.
+
+        With `honor_signal_levels` the strategy's own levels win where it gave
+        them. Every strategy already fills in `TradeSignal.stop_loss` and
+        `.take_profit`, but nothing in the live code ever read those fields, so
+        the grid's intent (stop at 2x spacing, target the next grid level) was
+        silently replaced by the global 2%/4% defaults.
+        """
+        is_long = pos["side"] == "buy"
+        entry = pos["entry"]
+
+        if self.honor_signal_levels:
+            stop_px = pos.get("sig_stop")
+            tp_px = pos.get("sig_tp")
+            # A level on the wrong side of entry is a strategy bug, not a stop;
+            # fall back rather than exit instantly at a nonsensical price.
+            if stop_px is not None and (
+                (is_long and stop_px >= entry) or (not is_long and stop_px <= entry)
+            ):
+                stop_px = None
+            if tp_px is not None and (
+                (is_long and tp_px <= entry) or (not is_long and tp_px >= entry)
+            ):
+                tp_px = None
+            if stop_px is None:
+                stop_px = (entry * (1 - rm.stop_loss_pct) if is_long
+                           else entry * (1 + rm.stop_loss_pct))
+            if tp_px is None:
+                tp_px = (entry * (1 + rm.take_profit_pct) if is_long
+                         else entry * (1 - rm.take_profit_pct))
+            return stop_px, tp_px
+
+        sl, tp = rm.stop_loss_pct, rm.take_profit_pct
+        stop_px = entry * (1 - sl) if is_long else entry * (1 + sl)
+        tp_px = entry * (1 + tp) if is_long else entry * (1 - tp)
+        return stop_px, tp_px
 
     def _timeline(self) -> list[tuple[datetime, str, int]]:
         """All (timestamp, symbol, bar index) events in chronological order."""
@@ -249,6 +319,8 @@ class Backtester:
                 "warmup": self.warmup,
                 "whole_shares": self.whole_shares,
                 "leverage": self.leverage,
+                "honor_signal_levels": self.honor_signal_levels,
+                "passive_entries": self.passive_entries,
                 **self.risk_overrides,
             },
         )
@@ -303,6 +375,8 @@ class Backtester:
                 entry_price=pos["entry"], exit_price=fill,
                 entry_time=pos["entry_time"], exit_time=when,
                 pnl=pnl, strategy=pos["strategy"], exit_reason=reason,
+                mae_pct=pos["mae"], mfe_pct=pos["mfe"],
+                bars_held=pos["bars"],
             ))
 
         for ts, sym, i in timeline:
@@ -324,18 +398,32 @@ class Backtester:
             rm.update_balance(eq_now)
             result.equity_curve.append((ts, eq_now))
 
+            # --- track excursions before deciding anything ---------------
+            if sym in open_pos:
+                pos = open_pos[sym]
+                entry = pos["entry"]
+                pos["bars"] += 1
+                if entry > 0:
+                    if pos["side"] == "buy":
+                        adverse = (bar.low - entry) / entry
+                        favorable = (bar.high - entry) / entry
+                    else:
+                        adverse = (entry - bar.high) / entry
+                        favorable = (entry - bar.low) / entry
+                    pos["mae"] = min(pos["mae"], adverse)
+                    pos["mfe"] = max(pos["mfe"], favorable)
+
             # --- intrabar stop / take-profit on an open position ---------
             if sym in open_pos:
                 pos = open_pos[sym]
                 is_long = pos["side"] == "buy"
                 entry = pos["entry"]
-                sl = rm.stop_loss_pct
-                tp = rm.take_profit_pct
-                stop_px = entry * (1 - sl) if is_long else entry * (1 + sl)
-                tp_px = entry * (1 + tp) if is_long else entry * (1 - tp)
+                stop_px, tp_px = self._exit_levels(pos, rm)
 
-                hit_stop = bar.low <= stop_px if is_long else bar.high >= stop_px
-                hit_tp = bar.high >= tp_px if is_long else bar.low <= tp_px
+                hit_stop = (bar.low <= stop_px if is_long
+                            else bar.high >= stop_px) if stop_px else False
+                hit_tp = (bar.high >= tp_px if is_long
+                          else bar.low <= tp_px) if tp_px else False
 
                 # Conservative: if the bar spans both, assume the stop filled.
                 if hit_stop:
@@ -390,8 +478,7 @@ class Backtester:
                 blocked["risk_rejected"] += 1
                 continue
 
-            fill = (self._buy_fill(price) if best.signal == Signal.BUY
-                    else self._sell_fill(price))
+            fill = self._entry_fill(price, best.signal == Signal.BUY)
             qty = size / fill if fill > 0 else 0.0
             if self.whole_shares:
                 qty = float(int(qty))
@@ -420,6 +507,8 @@ class Backtester:
             open_pos[sym] = {
                 "qty": qty, "entry": fill, "side": side,
                 "entry_time": ts, "strategy": best.strategy,
+                "sig_stop": best.stop_loss, "sig_tp": best.take_profit,
+                "mae": 0.0, "mfe": 0.0, "bars": 0,
             }
             rm.register_trade(sym, side, qty, fill)
 
