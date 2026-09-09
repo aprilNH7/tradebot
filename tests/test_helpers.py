@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from utils.helpers import format_pnl, format_price, safe_divide, timestamp_ms
+from utils.helpers import format_pnl, format_price, retry, safe_divide, timestamp_ms
 
 
 def test_timestamp_ms_is_monotonic():
@@ -49,3 +49,40 @@ def test_format_pnl_includes_explicit_sign(pnl, expected):
 )
 def test_safe_divide_handles_zero_divisor(a, b, default, expected):
     assert safe_divide(a, b, default) == expected
+
+
+# --------------------------------------------------------------------------
+# retry
+# --------------------------------------------------------------------------
+
+class RetryCounter:
+    def __init__(self, failures: int = 0):
+        self.failures = failures
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ConnectionError("transient")
+        return f"ok-{self.calls}"
+
+
+def test_retry_returns_first_success():
+    assert retry(RetryCounter(0), max_retries=3, delay=0.0) == "ok-1"
+
+
+def test_retry_succeeds_after_transient_failures():
+    assert retry(RetryCounter(2), max_retries=3, delay=0.0) == "ok-3"
+
+
+def test_retry_raises_last_error_after_exhaustion():
+    with pytest.raises(ConnectionError, match="transient"):
+        retry(RetryCounter(5), max_retries=2, delay=0.0)
+
+
+def test_retry_honors_max_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    counter = RetryCounter(10)
+    with pytest.raises(ConnectionError):
+        retry(counter, max_retries=4, delay=0.1)
+    assert counter.calls == 4
