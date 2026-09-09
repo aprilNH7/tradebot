@@ -26,11 +26,11 @@ class TradingEngine:
         self.custom_symbols: list[str] = []
         self._symbol_exchange_map: dict[str, str] = {}
 
-    def add_exchange(self, name: str, exchange: BaseExchange):
+    def add_exchange(self, name: str, exchange: BaseExchange) -> None:
         self.exchanges[name] = exchange
         log.info(f"Added exchange: {name}")
 
-    def add_strategy(self, strategy: BaseStrategy):
+    def add_strategy(self, strategy: BaseStrategy) -> None:
         self.strategies.append(strategy)
         log.info(f"Added strategy: {strategy.name}")
 
@@ -128,7 +128,7 @@ class TradingEngine:
                 return name, exchange
         return None
 
-    def scan_symbol(self, symbol: str, portfolio_value: Optional[float] = None):
+    def scan_symbol(self, symbol: str, portfolio_value: Optional[float] = None) -> None:
         """Run all strategies against a single symbol."""
         result = self._get_exchange_for_symbol(symbol)
         if not result:
@@ -466,7 +466,7 @@ class TradingEngine:
                 symbols.extend(settings.FOREX_PAIRS)
         return sorted(set(symbols))
 
-    def run_scan_cycle(self):
+    def run_scan_cycle(self) -> None:
         """Run one full scan across all symbols."""
         self.risk_manager.maybe_reset_daily()
 
@@ -520,7 +520,7 @@ class TradingEngine:
         status = self.risk_manager.get_status()
         log.info(f"Cycle complete — {status}")
 
-    def start(self, interval: int = None):
+    def start(self, interval: int = None) -> None:
         """Start the trading loop."""
         self.running = True
         self.scan_interval = interval or settings.SCAN_INTERVAL
@@ -537,7 +537,8 @@ class TradingEngine:
                 log.error(f"Engine error: {e}")
                 time.sleep(5)
 
-    def stop(self):
+    def stop(self) -> None:
+        """Stop the trading loop and log final performance."""
         self.running = False
         log.info("Engine stopped")
         perf = self.portfolio.get_performance()
