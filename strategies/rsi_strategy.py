@@ -15,7 +15,7 @@ class RSIStrategy(BaseStrategy):
     name = "rsi"
 
     def __init__(self, period: int = None, overbought: float = None,
-                 oversold: float = None):
+                 oversold: float = None) -> None:
         self.period = period or settings.RSI_PERIOD
         self.overbought = overbought or settings.RSI_OVERBOUGHT
         self.oversold = oversold or settings.RSI_OVERSOLD

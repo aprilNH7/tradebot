@@ -12,7 +12,7 @@ class ArbitrageStrategy(BaseStrategy):
     name = "arbitrage"
 
     def __init__(self, min_spread_pct: float = None,
-                 exchanges: list[BaseExchange] = None):
+                 exchanges: list[BaseExchange] = None) -> None:
         self.min_spread_pct = (
             min_spread_pct if min_spread_pct is not None
             else settings.ARBITRAGE_MIN_SPREAD_PCT

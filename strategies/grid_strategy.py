@@ -11,7 +11,7 @@ log = setup_logger("strategy.grid")
 class GridStrategy(BaseStrategy):
     name = "grid"
 
-    def __init__(self, levels: int = None, spacing_pct: float = None):
+    def __init__(self, levels: int = None, spacing_pct: float = None) -> None:
         self.levels = levels or settings.GRID_LEVELS
         self.spacing_pct = spacing_pct or settings.GRID_SPACING_PCT
         self.grid_prices: dict[str, list[float]] = {}

@@ -14,7 +14,7 @@ log = setup_logger("strategy.sma")
 class SMACrossoverStrategy(BaseStrategy):
     name = "sma_crossover"
 
-    def __init__(self, fast_period: int = None, slow_period: int = None):
+    def __init__(self, fast_period: int = None, slow_period: int = None) -> None:
         self.fast_period = fast_period or settings.SMA_FAST_PERIOD
         self.slow_period = slow_period or settings.SMA_SLOW_PERIOD
 
