@@ -21,6 +21,11 @@ class TradeRecord:
     entry_time: datetime = field(default_factory=datetime.now)
     exit_time: datetime | None = None
 
+    @property
+    def is_closed(self) -> bool:
+        """True once an exit price has been recorded."""
+        return self.exit_price is not None
+
 
 class Portfolio:
     def __init__(self):

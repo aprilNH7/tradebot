@@ -33,3 +33,14 @@ def test_trade_record_closed_fields():
     assert record.exit_price == 2900.0
     assert record.pnl == 200.0
     assert record.exit_time is not None
+    assert record.is_closed is True
+
+
+def test_trade_record_open_record_is_not_closed():
+    record = TradeRecord(
+        symbol="BTC/USDT",
+        side="buy",
+        quantity=1.5,
+        entry_price=50000.0,
+    )
+    assert record.is_closed is False
