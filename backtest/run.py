@@ -7,10 +7,13 @@
 
 import argparse
 import itertools
+from datetime import datetime
+from typing import Optional
 
 from backtest.data import load_universe
-from backtest.harness import Backtester
+from backtest.harness import Backtester, BacktestResult
 from config.settings import settings
+from strategies.base import BaseStrategy
 from strategies.grid_strategy import GridStrategy
 from strategies.rsi_strategy import RSIStrategy
 from strategies.sma_crossover import SMACrossoverStrategy
@@ -19,7 +22,7 @@ from utils.logger import setup_logger
 log = setup_logger("backtest.run")
 
 
-def build_strategies(names):
+def build_strategies(names: list[str]) -> list[BaseStrategy]:
     """Mirror main.build_engine's selection so the backtest measures the bot
     that actually runs. "all" excludes grid in both places; naming it directly
     still loads it so its numbers stay reproducible.
@@ -34,7 +37,7 @@ def build_strategies(names):
     return out
 
 
-def split_bars(bars: dict, train_frac: float = 0.7):
+def split_bars(bars: dict[str, list], train_frac: float = 0.7) -> tuple[dict[str, list], dict[str, list], datetime]:
     """Split every symbol's series at the same wall-clock date.
 
     Splitting per-symbol by index would leak: symbols with different bar counts
@@ -56,7 +59,7 @@ def split_bars(bars: dict, train_frac: float = 0.7):
     return train, test, cutoff
 
 
-def report(r, target: float, label: str = "BASELINE"):
+def report(r: BacktestResult, target: float, label: str = "BASELINE") -> None:
     print(f"\n{'=' * 66}")
     print(f"  {label}")
     print(f"{'=' * 66}")
@@ -103,7 +106,7 @@ def report(r, target: float, label: str = "BASELINE"):
         print(f"    {name:<16} {a['trips']:>5} trips  ${a['pnl']:>10,.2f}")
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=180)
     ap.add_argument("--timeframe", default=settings.CANDLE_TIMEFRAME)
