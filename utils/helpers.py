@@ -1,6 +1,8 @@
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 def timestamp_ms() -> int:
@@ -24,7 +26,7 @@ def safe_divide(a: float, b: float, default: float = 0.0) -> float:
     return a / b if b != 0 else default
 
 
-def retry(func, max_retries: int = 3, delay: float = 1.0):
+def retry(func: Callable[[], T], max_retries: int = 3, delay: float = 1.0) -> T:
     """Retry a function call with exponential backoff."""
     last_error: Optional[Exception] = None
     for attempt in range(max_retries):
