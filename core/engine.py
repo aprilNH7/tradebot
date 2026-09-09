@@ -27,14 +27,17 @@ class TradingEngine:
         self._symbol_exchange_map: dict[str, str] = {}
 
     def add_exchange(self, name: str, exchange: BaseExchange) -> None:
+        """Register an exchange connector under a friendly name."""
         self.exchanges[name] = exchange
         log.info(f"Added exchange: {name}")
 
     def add_strategy(self, strategy: BaseStrategy) -> None:
+        """Register a strategy to evaluate on each scan cycle."""
         self.strategies.append(strategy)
         log.info(f"Added strategy: {strategy.name}")
 
     def connect_all(self) -> dict[str, bool]:
+        """Connect every configured exchange and adopt any existing positions."""
         results = {}
         for name, exchange in self.exchanges.items():
             ok = exchange.connect()
@@ -545,6 +548,7 @@ class TradingEngine:
         log.info(f"Final performance: {perf}")
 
     def get_status(self) -> dict:
+        """Return a snapshot of engine, exchange, strategy and risk state."""
         return {
             "running": self.running,
             "exchanges": {n: e.market_type.value for n, e in self.exchanges.items()},
