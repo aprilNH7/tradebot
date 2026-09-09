@@ -69,6 +69,7 @@ class RiskManager:
         self._halted_on: Optional[date] = None
 
     def update_balance(self, balance: float):
+        """Ingest a balance feed update and refresh peak, drawdown and daily cap."""
         self.metrics.current_balance = balance
         if balance > self.metrics.peak_balance:
             self.metrics.peak_balance = balance
@@ -169,6 +170,7 @@ class RiskManager:
 
     def register_trade(self, symbol: str, side: str, quantity: float,
                        entry_price: float, count_toward_limits: bool = True):
+        """Track a newly opened position and optionally consume daily budget."""
         self._active_positions[symbol] = {
             # Normalised because callers pass either OrderSide.value ("buy")
             # or Signal.value ("BUY") — comparing raw values silently fails.
@@ -191,6 +193,7 @@ class RiskManager:
         return pos["side"] == "buy"
 
     def close_position(self, symbol: str, exit_price: float):
+        """Close the tracked position for `symbol` and update performance metrics."""
         pos = self._active_positions.pop(symbol, None)
         if not pos:
             return
@@ -251,6 +254,7 @@ class RiskManager:
         return False
 
     def reset_daily(self):
+        """Reset daily counters and release the kill-switch for a new session."""
         self.metrics.daily_pnl = 0.0
         self.metrics.daily_trades = 0
         self.metrics.last_reset = datetime.now()
