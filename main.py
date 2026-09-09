@@ -88,7 +88,8 @@ def build_engine(markets: list[str], strategies: list[str],
     return engine
 
 
-def main():
+def main() -> None:
+    """CLI entry point — parse arguments, connect exchanges, and start trading."""
     parser = argparse.ArgumentParser(
         description="TradeBot — Multi-market automated trading",
         formatter_class=argparse.RawDescriptionHelpFormatter,
