@@ -24,22 +24,30 @@ class TradeRecord:
 
 class Portfolio:
     def __init__(self):
+        """Initialise an empty portfolio with no capital or trade history."""
         self.trade_history: list[TradeRecord] = []
         self.balances: dict[str, float] = {}
         self.initial_capital: float = 0.0
 
     def set_initial_capital(self, amount: float):
+        """Record the starting capital and log it for the audit trail."""
         self.initial_capital = amount
         log.info(f"Initial capital set: ${amount:.2f}")
 
     def record_trade(self, trade: TradeRecord):
+        """Append a new open trade to the history and log the entry."""
         self.trade_history.append(trade)
         log.info(
             f"Trade recorded: {trade.side} {trade.quantity} {trade.symbol} "
             f"@ ${trade.entry_price:.4f} [{trade.strategy}]"
         )
 
-    def close_trade(self, symbol: str, exit_price: float):
+    def close_trade(self, symbol: str, exit_price: float) -> TradeRecord | None:
+        """Mark the most recent open trade for `symbol` as closed.
+
+        Computes realised PnL from the entry price and side, and returns the
+        closed trade record. Returns None if no matching open trade exists.
+        """
         for trade in reversed(self.trade_history):
             if trade.symbol == symbol and trade.exit_price is None:
                 trade.exit_price = exit_price
@@ -55,15 +63,19 @@ class Portfolio:
         return None
 
     def get_open_trades(self) -> list[TradeRecord]:
+        """Return all trades that have not yet been closed."""
         return [t for t in self.trade_history if t.exit_price is None]
 
     def get_closed_trades(self) -> list[TradeRecord]:
+        """Return all trades that have an exit price recorded."""
         return [t for t in self.trade_history if t.exit_price is not None]
 
     def get_total_pnl(self) -> float:
+        """Return the sum of realised PnL across all closed trades."""
         return sum(t.pnl for t in self.trade_history if t.exit_price is not None)
 
     def get_performance(self) -> dict:
+        """Compute headline performance metrics from closed trades."""
         closed = self.get_closed_trades()
         winners = [t for t in closed if t.pnl > 0]
         losers = [t for t in closed if t.pnl < 0]
@@ -86,6 +98,7 @@ class Portfolio:
         }
 
     def get_strategy_breakdown(self) -> dict:
+        """Aggregate realised PnL, trade count and wins by strategy name."""
         breakdown = {}
         for trade in self.get_closed_trades():
             if trade.strategy not in breakdown:
