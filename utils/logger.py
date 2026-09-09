@@ -6,6 +6,12 @@ import colorlog
 
 
 def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
+    """Configure a coloured console logger and a daily rotating file handler.
+
+    The logger writes colourised output to stdout and append-only records to
+    logs/tradebot_YYYYMMDD.log. Calling the function twice for the same name
+    returns the existing handler set instead of adding duplicates.
+    """
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
