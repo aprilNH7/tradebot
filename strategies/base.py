@@ -8,6 +8,9 @@ from typing import Optional
 from exchanges.base import OHLCV
 
 
+__all__ = ["Signal", "TradeSignal", "BaseStrategy"]
+
+
 class Signal(Enum):
     BUY = "BUY"
     SELL = "SELL"
