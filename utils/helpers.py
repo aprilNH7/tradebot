@@ -4,19 +4,23 @@ from typing import Optional
 
 
 def timestamp_ms() -> int:
+    """Return the current Unix timestamp in milliseconds."""
     return int(time.time() * 1000)
 
 
 def format_price(price: float, decimals: int = 8) -> str:
+    """Format a numeric price as a string, trimming trailing zeros."""
     return f"{price:.{decimals}f}".rstrip("0").rstrip(".")
 
 
 def format_pnl(pnl: float) -> str:
+    """Format a PnL value as a percentage string with an explicit sign."""
     sign = "+" if pnl >= 0 else ""
     return f"{sign}{pnl:.2f}%"
 
 
 def safe_divide(a: float, b: float, default: float = 0.0) -> float:
+    """Divide two floats, returning `default` when the divisor is zero."""
     return a / b if b != 0 else default
 
 
