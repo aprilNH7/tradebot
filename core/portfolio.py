@@ -29,12 +29,12 @@ class Portfolio:
         self.balances: dict[str, float] = {}
         self.initial_capital: float = 0.0
 
-    def set_initial_capital(self, amount: float):
+    def set_initial_capital(self, amount: float) -> None:
         """Record the starting capital and log it for the audit trail."""
         self.initial_capital = amount
         log.info(f"Initial capital set: ${amount:.2f}")
 
-    def record_trade(self, trade: TradeRecord):
+    def record_trade(self, trade: TradeRecord) -> None:
         """Append a new open trade to the history and log the entry."""
         self.trade_history.append(trade)
         log.info(
