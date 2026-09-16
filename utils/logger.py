@@ -1,6 +1,7 @@
 import logging
+import os
 import sys
-from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 
 import colorlog
 
@@ -9,8 +10,9 @@ def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
     """Configure a coloured console logger and a daily rotating file handler.
 
     The logger writes colourised output to stdout and append-only records to
-    logs/tradebot_YYYYMMDD.log. Calling the function twice for the same name
-    returns the existing handler set instead of adding duplicates.
+    logs/tradebot.log, rotating at midnight and keeping 7 days of backups.
+    Calling the function twice for the same name returns the existing handler
+    set instead of adding duplicates.
     """
     logger = logging.getLogger(name)
     if logger.handlers:
@@ -33,9 +35,14 @@ def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
     ))
     logger.addHandler(console)
 
-    # File handler
-    file_handler = logging.FileHandler(
-        f"logs/tradebot_{datetime.now().strftime('%Y%m%d')}.log"
+    # Rotating file handler
+    os.makedirs("logs", exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        filename="logs/tradebot.log",
+        when="midnight",
+        interval=1,
+        backupCount=7,
+        utc=True,
     )
     file_handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
