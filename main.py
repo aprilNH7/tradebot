@@ -132,12 +132,19 @@ Examples:
         "--status", action="store_true",
         help="Show current configuration and exit",
     )
+    parser.add_argument(
+        "--live", action="store_true",
+        help="Explicitly allow live trading orders (default: paper/dry-run mode)",
+    )
 
     args = parser.parse_args()
 
     # Create logs directory
     os.makedirs("logs", exist_ok=True)
     os.makedirs("data", exist_ok=True)
+
+    if not args.live:
+        log.warning("Running in paper/dry-run mode. Use --live to submit real orders.")
 
     # Show config status
     if args.status:
